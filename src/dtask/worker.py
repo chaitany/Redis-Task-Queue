@@ -1,5 +1,7 @@
 """Worker - consumes tasks from Redis queues with fault tolerance."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -8,6 +10,7 @@ import threading
 import time
 import traceback
 import uuid
+from typing import Any, cast
 
 from .config import (
     TASK_HASH,
@@ -42,13 +45,13 @@ class Worker:
         self.concurrency = concurrency
         self._shutdown = threading.Event()
         self._threads: list[threading.Thread] = []
-        self._lua_promote = None
-        self._lua_claim = None
-        self._lua_complete = None
-        self._lua_fail = None
-        self._lua_requeue = None
+        self._lua_promote: Any = None
+        self._lua_claim: Any = None
+        self._lua_complete: Any = None
+        self._lua_fail: Any = None
+        self._lua_requeue: Any = None
 
-    def _register_lua_scripts(self):
+    def _register_lua_scripts(self) -> None:
         r = get_redis()
         self._lua_promote = r.register_script(PROMOTE_SCHEDULED_SCRIPT)
         self._lua_claim = r.register_script(CLAIM_TASK_SCRIPT)
@@ -56,7 +59,7 @@ class Worker:
         self._lua_fail = r.register_script(FAIL_TASK_SCRIPT)
         self._lua_requeue = r.register_script(REQUEUE_ORPHAN_SCRIPT)
 
-    def start(self):
+    def start(self) -> None:
         logger.info(f"Worker {self.worker_id} starting, queues={self.queues}, concurrency={self.concurrency}")
         r = get_redis()
 
@@ -92,11 +95,11 @@ class Worker:
         finally:
             self._graceful_shutdown()
 
-    def _handle_signal(self, signum, frame):
+    def _handle_signal(self, signum: int, frame: Any) -> None:
         logger.info(f"Received signal {signum}, initiating shutdown...")
         self._shutdown.set()
 
-    def _graceful_shutdown(self):
+    def _graceful_shutdown(self) -> None:
         logger.info(f"Worker {self.worker_id} shutting down...")
         self._shutdown.set()
 
@@ -108,7 +111,7 @@ class Worker:
         r.delete(f"{WORKER_HEARTBEAT_PREFIX}:{self.worker_id}")
 
         processing_key = f"{PROCESSING_PREFIX}:{self.worker_id}"
-        orphaned = r.lrange(processing_key, 0, -1)
+        orphaned = cast(list[str], r.lrange(processing_key, 0, -1))
         if orphaned:
             logger.warning(f"Re-queuing {len(orphaned)} orphaned tasks")
             for task_id in orphaned:
@@ -117,7 +120,7 @@ class Worker:
 
         logger.info(f"Worker {self.worker_id} stopped")
 
-    def _update_heartbeat(self):
+    def _update_heartbeat(self) -> None:
         r = get_redis()
         r.setex(
             f"{WORKER_HEARTBEAT_PREFIX}:{self.worker_id}",
@@ -125,7 +128,7 @@ class Worker:
             time.time(),
         )
 
-    def _heartbeat_loop(self):
+    def _heartbeat_loop(self) -> None:
         while not self._shutdown.is_set():
             try:
                 self._update_heartbeat()
@@ -133,7 +136,7 @@ class Worker:
                 logger.exception("Heartbeat failed")
             self._shutdown.wait(timeout=HEARTBEAT_INTERVAL_SEC)
 
-    def _scheduler_loop(self):
+    def _scheduler_loop(self) -> None:
         while not self._shutdown.is_set():
             try:
                 count = self._lua_promote(
@@ -146,7 +149,7 @@ class Worker:
                 logger.exception("Scheduler loop error")
             self._shutdown.wait(timeout=2)
 
-    def _reaper_loop(self):
+    def _reaper_loop(self) -> None:
         while not self._shutdown.is_set():
             try:
                 self._reap_dead_workers()
@@ -154,9 +157,9 @@ class Worker:
                 logger.exception("Reaper loop error")
             self._shutdown.wait(timeout=REAP_INTERVAL_SEC)
 
-    def _reap_dead_workers(self):
+    def _reap_dead_workers(self) -> None:
         r = get_redis()
-        all_workers = r.smembers(WORKER_REGISTRY)
+        all_workers = cast(set[str], r.smembers(WORKER_REGISTRY))
         for wid in all_workers:
             if wid == self.worker_id:
                 continue
@@ -164,13 +167,13 @@ class Worker:
             if not r.exists(heartbeat_key):
                 logger.warning(f"Reaping dead worker: {wid}")
                 processing_key = f"{PROCESSING_PREFIX}:{wid}"
-                orphaned = r.lrange(processing_key, 0, -1)
+                orphaned = cast(list[str], r.lrange(processing_key, 0, -1))
                 for task_id in orphaned:
                     self._requeue_orphan(task_id)
                 r.delete(processing_key)
                 r.srem(WORKER_REGISTRY, wid)
 
-    def _requeue_orphan(self, task_id: str):
+    def _requeue_orphan(self, task_id: str) -> None:
         try:
             result = self._lua_requeue(
                 keys=[TASK_HASH],
@@ -181,16 +184,16 @@ class Worker:
         except Exception:
             logger.exception(f"Failed to requeue orphan task {task_id}")
 
-    def _work_loop(self):
+    def _work_loop(self) -> None:
         r = get_redis()
         queue_keys = [f"{QUEUE_PREFIX}:{q}" for q in self.queues]
         processing_key = f"{PROCESSING_PREFIX}:{self.worker_id}"
 
         while not self._shutdown.is_set():
             try:
-                task_id = None
+                task_id: str | None = None
                 for qk in queue_keys:
-                    task_id = r.rpop(qk)
+                    task_id = cast(str | None, r.rpop(qk))
                     if task_id:
                         break
 
@@ -213,9 +216,9 @@ class Worker:
                     logger.exception("Work loop error")
                     time.sleep(1)
 
-    def _execute_task(self, task_id: str, processing_key: str):
+    def _execute_task(self, task_id: str, processing_key: str) -> None:
         r = get_redis()
-        raw = r.hget(TASK_HASH, task_id)
+        raw = cast(str | None, r.hget(TASK_HASH, task_id))
         if raw is None:
             r.lrem(processing_key, 1, task_id)
             return

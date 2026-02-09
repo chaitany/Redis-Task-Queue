@@ -1,8 +1,23 @@
 [project]
-name = "repl-nix-workspace"
+name = "dtask"
 version = "0.1.0"
-description = "Add your description here"
+description = "A production-grade distributed task scheduler backed by Redis"
 requires-python = ">=3.11"
 dependencies = [
+    "pytest>=9.0.2",
     "redis>=7.1.0",
 ]
+
+[project.scripts]
+dtask = "dtask.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+pythonPlatform = "Linux"
+venvPath = "."
+venv = ".pythonlibs"
+typeCheckingMode = "basic"

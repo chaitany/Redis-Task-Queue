@@ -66,11 +66,19 @@ src/dtask/
   models.py          - Task dataclass and state enum
   producer.py        - Task enqueueing and query functions
   registry.py        - Handler registration decorator
+  lua_scripts.py     - Lua scripts for atomic Redis operations
   worker.py          - Worker with concurrency, heartbeat, reaping
   tasks.py           - Example task handlers
   cli.py             - CLI interface
+tests/
+  conftest.py        - Shared fixtures (Redis flush, client)
+  test_models.py     - Task model & serialization tests
+  test_registry.py   - Handler registration tests
+  test_producer.py   - Enqueue, list, cancel tests
+  test_worker.py     - Worker execution, retries, concurrency tests
 main.py              - Entry point
 demo.py              - Interactive demo script
+pyproject.toml       - Project metadata, CLI entrypoint, pytest config
 ```
 
 ## Usage
@@ -100,5 +108,12 @@ python main.py purge all
 - Redis URL: `REDIS_URL` env var (default: `redis://localhost:6000/0`)
 - Redis runs on port 6000 in this environment
 
+## Testing
+```bash
+python -m pytest tests/ -v
+```
+28 tests covering models, registry, producer, and worker.
+
 ## Recent Changes
+- 2026-02-09: Added tests, proper pyproject.toml with CLI entrypoint, type annotations, Lua scripts for atomic operations
 - 2026-02-09: Initial implementation of full task scheduler

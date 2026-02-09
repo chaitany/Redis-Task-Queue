@@ -1,22 +1,25 @@
 """CLI interface for the distributed task scheduler."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import sys
 import textwrap
 import time
+from typing import cast
 
 from . import tasks as _tasks_module  # noqa: F401 - registers handlers on import
 from .connection import check_connection, get_redis
-from .config import TASK_HASH, DEAD_LETTER_SET, WORKER_REGISTRY, WORKER_HEARTBEAT_PREFIX, QUEUE_PREFIX
-from .models import TaskState
+from .config import TASK_HASH, DEAD_LETTER_SET, WORKER_REGISTRY, WORKER_HEARTBEAT_PREFIX
+from .models import Task, TaskState
 from .producer import enqueue, get_task, list_tasks, cancel_task
 from .registry import list_registered
 from .worker import Worker
 
 
-def _setup_logging(verbose: bool = False):
+def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -25,8 +28,8 @@ def _setup_logging(verbose: bool = False):
     )
 
 
-def cmd_submit(args):
-    payload = {}
+def cmd_submit(args: argparse.Namespace) -> None:
+    payload: dict = {}
     if args.payload:
         try:
             payload = json.loads(args.payload)
@@ -49,7 +52,7 @@ def cmd_submit(args):
         print(f"  delay:   {args.delay}s")
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     task = get_task(args.task_id)
     if task is None:
         print(f"Task {args.task_id} not found")
@@ -63,7 +66,7 @@ def cmd_status(args):
     print(f"  created:    {_fmt_time(task.created_at)}")
     if task.started_at:
         print(f"  started:    {_fmt_time(task.started_at)}")
-    if task.completed_at:
+    if task.completed_at and task.started_at:
         print(f"  completed:  {_fmt_time(task.completed_at)}")
         print(f"  duration:   {task.completed_at - task.started_at:.2f}s")
     if task.worker_id:
@@ -74,7 +77,7 @@ def cmd_status(args):
         print(f"  error:      {task.error.splitlines()[0]}")
 
 
-def cmd_list(args):
+def cmd_list(args: argparse.Namespace) -> None:
     state_filter = None
     if args.state:
         try:
@@ -96,21 +99,21 @@ def cmd_list(args):
         print(f"{t.task_id:<14} {t.task_type:<14} {t.state.value:<10} {t.attempts:<10} {_fmt_time(t.created_at):<20}")
 
 
-def cmd_cancel(args):
+def cmd_cancel(args: argparse.Namespace) -> None:
     if cancel_task(args.task_id):
         print(f"Task {args.task_id} cancelled")
     else:
         print(f"Cannot cancel task {args.task_id} (not found or already running)")
 
 
-def cmd_worker(args):
+def cmd_worker(args: argparse.Namespace) -> None:
     _setup_logging(args.verbose)
     queues = [q.strip() for q in args.queues.split(",")]
     w = Worker(queues=queues, concurrency=args.concurrency)
     w.start()
 
 
-def cmd_info(args):
+def cmd_info(args: argparse.Namespace) -> None:
     if not check_connection():
         print("Cannot connect to Redis")
         sys.exit(1)
@@ -118,8 +121,8 @@ def cmd_info(args):
     r = get_redis()
     print("Redis: connected")
 
-    workers = r.smembers(WORKER_REGISTRY)
-    alive = []
+    workers = cast(set[str], r.smembers(WORKER_REGISTRY))
+    alive: list[str] = []
     for wid in workers:
         hb_key = f"{WORKER_HEARTBEAT_PREFIX}:{wid}"
         if r.exists(hb_key):
@@ -131,32 +134,31 @@ def cmd_info(args):
 
     print(f"\nRegistered task types: {', '.join(list_registered()) or 'none'}")
 
-    all_raw = r.hvals(TASK_HASH)
-    counts = {s.value: 0 for s in TaskState}
+    all_raw = cast(list[str], r.hvals(TASK_HASH))
+    counts: dict[str, int] = {s.value: 0 for s in TaskState}
     for raw in all_raw:
-        from .models import Task as T
-        t = T.from_json(raw)
+        t = Task.from_json(raw)
         counts[t.state.value] += 1
 
-    print(f"\nTask counts:")
+    print("\nTask counts:")
     for state, count in counts.items():
         if count > 0:
             print(f"  {state}: {count}")
 
-    dead_count = r.scard(DEAD_LETTER_SET)
+    dead_count = cast(int, r.scard(DEAD_LETTER_SET))
     if dead_count:
         print(f"\nDead letter queue: {dead_count} tasks")
 
 
-def cmd_purge(args):
+def cmd_purge(args: argparse.Namespace) -> None:
     r = get_redis()
     if args.target == "all":
-        keys = r.keys("dtask:*")
+        keys = cast(list[str], r.keys("dtask:*"))
         if keys:
             r.delete(*keys)
         print(f"Purged {len(keys)} keys")
     elif args.target == "dead":
-        dead_ids = r.smembers(DEAD_LETTER_SET)
+        dead_ids = cast(set[str], r.smembers(DEAD_LETTER_SET))
         if dead_ids:
             pipe = r.pipeline()
             for tid in dead_ids:
@@ -165,12 +167,11 @@ def cmd_purge(args):
             pipe.execute()
         print(f"Purged {len(dead_ids)} dead tasks")
     elif args.target == "completed":
-        all_raw = r.hvals(TASK_HASH)
+        all_raw = cast(list[str], r.hvals(TASK_HASH))
         count = 0
         pipe = r.pipeline()
         for raw in all_raw:
-            from .models import Task as T
-            t = T.from_json(raw)
+            t = Task.from_json(raw)
             if t.state == TaskState.SUCCESS:
                 pipe.hdel(TASK_HASH, t.task_id)
                 count += 1
@@ -182,7 +183,7 @@ def _fmt_time(ts: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="dtask",
         description="Distributed Task Scheduler backed by Redis",

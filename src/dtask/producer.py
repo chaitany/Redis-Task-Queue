@@ -1,7 +1,9 @@
 """Task producer - enqueue tasks into Redis."""
 
-import json
+from __future__ import annotations
+
 import time
+from typing import cast
 
 from .config import TASK_HASH, QUEUE_PREFIX, SCHEDULED_SET
 from .connection import get_redis
@@ -46,7 +48,7 @@ def enqueue(
 
 def get_task(task_id: str) -> Task | None:
     r = get_redis()
-    raw = r.hget(TASK_HASH, task_id)
+    raw = cast(str | None, r.hget(TASK_HASH, task_id))
     if raw is None:
         return None
     return Task.from_json(raw)
@@ -54,8 +56,8 @@ def get_task(task_id: str) -> Task | None:
 
 def list_tasks(state: TaskState | None = None, limit: int = 50) -> list[Task]:
     r = get_redis()
-    all_raw = r.hvals(TASK_HASH)
-    tasks = []
+    all_raw = cast(list[str], r.hvals(TASK_HASH))
+    tasks: list[Task] = []
     for raw in all_raw:
         t = Task.from_json(raw)
         if state is None or t.state == state:
@@ -71,4 +73,4 @@ def cancel_task(task_id: str) -> bool:
         keys=[TASK_HASH, SCHEDULED_SET],
         args=[task_id, QUEUE_PREFIX, time.time()],
     )
-    return result is not None and int(result) > 0
+    return result is not None and int(cast(int, result)) > 0
