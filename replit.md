@@ -22,6 +22,7 @@ Producer --> Redis Queues --> Worker(s) --> Task Handlers
 - **Worker** (`src/dtask/worker.py`): Consumes tasks with concurrency, heartbeats, dead worker reaping
 - **Registry** (`src/dtask/registry.py`): Maps task_type strings to handler functions via decorators
 - **Models** (`src/dtask/models.py`): Task dataclass with full lifecycle state machine
+- **Logging** (`src/dtask/logging.py`): Structured JSON log formatter with task/worker context fields
 - **CLI** (`src/dtask/cli.py`): argparse-based command interface
 
 ### Redis Data Structures
@@ -66,9 +67,10 @@ src/dtask/
   models.py          - Task dataclass and state enum
   producer.py        - Task enqueueing and query functions
   registry.py        - Handler registration decorator
+  logging.py         - Structured JSON log formatter
   lua_scripts.py     - Lua scripts for atomic Redis operations
   worker.py          - Worker with concurrency, heartbeat, reaping
-  tasks.py           - Example task handlers
+  tasks.py           - Example task handlers (echo, add, send_email, cpu_work, always_fail, etc.)
   cli.py             - CLI interface
 tests/
   conftest.py        - Shared fixtures (Redis flush, client)
@@ -115,5 +117,7 @@ python -m pytest tests/ -v
 28 tests covering models, registry, producer, and worker.
 
 ## Recent Changes
+- 2026-02-09: Added structured JSON logging with task lifecycle events, worker events, and failure context
+- 2026-02-09: Added send_email, cpu_work, and always_fail example task handlers
 - 2026-02-09: Added tests, proper pyproject.toml with CLI entrypoint, type annotations, Lua scripts for atomic operations
 - 2026-02-09: Initial implementation of full task scheduler

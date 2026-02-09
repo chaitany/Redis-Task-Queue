@@ -59,8 +59,13 @@ class Worker:
         self._lua_fail = r.register_script(FAIL_TASK_SCRIPT)
         self._lua_requeue = r.register_script(REQUEUE_ORPHAN_SCRIPT)
 
+    def _log(self, level: int, msg: str, **extra: Any) -> None:
+        extra["worker_id"] = self.worker_id
+        logger.log(level, msg, extra=extra)
+
     def start(self) -> None:
-        logger.info(f"Worker {self.worker_id} starting, queues={self.queues}, concurrency={self.concurrency}")
+        self._log(logging.INFO, "Worker starting", event="worker_start",
+                  queues=self.queues, concurrency=self.concurrency)
         r = get_redis()
 
         self._register_lua_scripts()
@@ -85,7 +90,7 @@ class Worker:
             t.start()
             self._threads.append(t)
 
-        logger.info(f"Worker {self.worker_id} ready")
+        self._log(logging.INFO, "Worker ready", event="worker_ready")
 
         try:
             while not self._shutdown.is_set():
@@ -96,11 +101,12 @@ class Worker:
             self._graceful_shutdown()
 
     def _handle_signal(self, signum: int, frame: Any) -> None:
-        logger.info(f"Received signal {signum}, initiating shutdown...")
+        self._log(logging.INFO, f"Received signal {signum}, initiating shutdown",
+                  event="worker_signal")
         self._shutdown.set()
 
     def _graceful_shutdown(self) -> None:
-        logger.info(f"Worker {self.worker_id} shutting down...")
+        self._log(logging.INFO, "Worker shutting down", event="worker_shutdown")
         self._shutdown.set()
 
         for t in self._threads:
@@ -113,12 +119,13 @@ class Worker:
         processing_key = f"{PROCESSING_PREFIX}:{self.worker_id}"
         orphaned = cast(list[str], r.lrange(processing_key, 0, -1))
         if orphaned:
-            logger.warning(f"Re-queuing {len(orphaned)} orphaned tasks")
+            self._log(logging.WARNING, f"Re-queuing {len(orphaned)} orphaned tasks",
+                      event="worker_requeue_orphans", orphan_count=len(orphaned))
             for task_id in orphaned:
                 self._requeue_orphan(task_id)
             r.delete(processing_key)
 
-        logger.info(f"Worker {self.worker_id} stopped")
+        self._log(logging.INFO, "Worker stopped", event="worker_stopped")
 
     def _update_heartbeat(self) -> None:
         r = get_redis()
@@ -133,7 +140,8 @@ class Worker:
             try:
                 self._update_heartbeat()
             except Exception:
-                logger.exception("Heartbeat failed")
+                self._log(logging.ERROR, "Heartbeat failed", event="heartbeat_error")
+                logger.debug("Heartbeat exception details", exc_info=True)
             self._shutdown.wait(timeout=HEARTBEAT_INTERVAL_SEC)
 
     def _scheduler_loop(self) -> None:
@@ -144,9 +152,11 @@ class Worker:
                     args=[time.time(), QUEUE_PREFIX],
                 )
                 if count and int(count) > 0:
-                    logger.info(f"Promoted {count} scheduled tasks")
+                    self._log(logging.INFO, f"Promoted {count} scheduled tasks",
+                              event="scheduler_promote", promoted_count=int(count))
             except Exception:
-                logger.exception("Scheduler loop error")
+                self._log(logging.ERROR, "Scheduler loop error", event="scheduler_error")
+                logger.debug("Scheduler exception details", exc_info=True)
             self._shutdown.wait(timeout=2)
 
     def _reaper_loop(self) -> None:
@@ -154,7 +164,8 @@ class Worker:
             try:
                 self._reap_dead_workers()
             except Exception:
-                logger.exception("Reaper loop error")
+                self._log(logging.ERROR, "Reaper loop error", event="reaper_error")
+                logger.debug("Reaper exception details", exc_info=True)
             self._shutdown.wait(timeout=REAP_INTERVAL_SEC)
 
     def _reap_dead_workers(self) -> None:
@@ -165,9 +176,11 @@ class Worker:
                 continue
             heartbeat_key = f"{WORKER_HEARTBEAT_PREFIX}:{wid}"
             if not r.exists(heartbeat_key):
-                logger.warning(f"Reaping dead worker: {wid}")
                 processing_key = f"{PROCESSING_PREFIX}:{wid}"
                 orphaned = cast(list[str], r.lrange(processing_key, 0, -1))
+                self._log(logging.WARNING, f"Reaping dead worker {wid}",
+                          event="reaper_dead_worker", dead_worker_id=wid,
+                          orphan_count=len(orphaned))
                 for task_id in orphaned:
                     self._requeue_orphan(task_id)
                 r.delete(processing_key)
@@ -180,9 +193,12 @@ class Worker:
                 args=[QUEUE_PREFIX, task_id, time.time()],
             )
             if result and int(result) > 0:
-                logger.info(f"Re-queued orphaned task {task_id}")
+                self._log(logging.INFO, f"Re-queued orphaned task {task_id}",
+                          event="task_requeued", task_id=task_id)
         except Exception:
-            logger.exception(f"Failed to requeue orphan task {task_id}")
+            self._log(logging.ERROR, f"Failed to requeue orphan task {task_id}",
+                      event="task_requeue_error", task_id=task_id)
+            logger.debug("Requeue exception details", exc_info=True)
 
     def _work_loop(self) -> None:
         r = get_redis()
@@ -213,7 +229,8 @@ class Worker:
 
             except Exception:
                 if not self._shutdown.is_set():
-                    logger.exception("Work loop error")
+                    self._log(logging.ERROR, "Work loop error", event="work_loop_error")
+                    logger.debug("Work loop exception details", exc_info=True)
                     time.sleep(1)
 
     def _execute_task(self, task_id: str, processing_key: str) -> None:
@@ -227,7 +244,9 @@ class Worker:
 
         handler = get_handler(task.task_type)
         if handler is None:
-            logger.error(f"No handler for task_type={task.task_type}")
+            self._log(logging.ERROR, f"No handler for task_type={task.task_type}",
+                      event="task_no_handler", task_id=task.task_id,
+                      task_type=task.task_type)
             task.state = TaskState.DEAD
             task.error = f"No handler registered for task_type '{task.task_type}'"
             task.touch()
@@ -235,29 +254,49 @@ class Worker:
             r.lrem(processing_key, 1, task_id)
             return
 
-        logger.info(f"Executing task {task.task_id} (type={task.task_type}, attempt={task.attempts}/{task.max_retries + 1})")
+        self._log(logging.INFO, f"Executing task {task.task_id}",
+                  event="task_start", task_id=task.task_id,
+                  task_type=task.task_type, queue=task.queue,
+                  attempt=task.attempts, max_attempts=task.max_retries + 1)
+
+        start_time = time.time()
 
         try:
             result = handler(task.payload)
             result_json = json.dumps(result) if result is not None else "{}"
+            elapsed = round(time.time() - start_time, 4)
 
             self._lua_complete(
                 keys=[TASK_HASH, processing_key],
                 args=[task_id, result_json, time.time()],
             )
-            logger.info(f"Task {task.task_id} succeeded")
+            self._log(logging.INFO, f"Task {task.task_id} succeeded",
+                      event="task_success", task_id=task.task_id,
+                      task_type=task.task_type, duration_sec=elapsed,
+                      attempt=task.attempts)
 
         except Exception as e:
+            elapsed = round(time.time() - start_time, 4)
             tb = traceback.format_exc()
             error_msg = f"{type(e).__name__}: {e}\n{tb}"
-            logger.error(f"Task {task.task_id} failed: {e}")
 
             outcome = self._lua_fail(
                 keys=[TASK_HASH, processing_key, SCHEDULED_SET, DEAD_LETTER_SET],
                 args=[task_id, error_msg, time.time(), task.max_retries, task.retry_delay_sec, task.attempts],
             )
+
             if outcome == "retry":
                 delay = task.retry_delay_sec * (2 ** (task.attempts - 1))
-                logger.info(f"Task {task.task_id} scheduled for retry in {delay}s")
+                self._log(logging.WARNING, f"Task {task.task_id} failed, retrying in {delay}s",
+                          event="task_retry", task_id=task.task_id,
+                          task_type=task.task_type, duration_sec=elapsed,
+                          attempt=task.attempts, max_attempts=task.max_retries + 1,
+                          delay_sec=delay, error_type=type(e).__name__,
+                          error_msg=str(e), outcome="retry")
             elif outcome == "dead":
-                logger.warning(f"Task {task.task_id} moved to dead letter queue after {task.attempts} attempts")
+                self._log(logging.ERROR, f"Task {task.task_id} dead after {task.attempts} attempts",
+                          event="task_dead", task_id=task.task_id,
+                          task_type=task.task_type, duration_sec=elapsed,
+                          attempt=task.attempts, max_attempts=task.max_retries + 1,
+                          error_type=type(e).__name__, error_msg=str(e),
+                          outcome="dead")

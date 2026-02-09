@@ -13,19 +13,11 @@ from typing import cast
 from . import tasks as _tasks_module  # noqa: F401 - registers handlers on import
 from .connection import check_connection, get_redis
 from .config import TASK_HASH, DEAD_LETTER_SET, WORKER_REGISTRY, WORKER_HEARTBEAT_PREFIX
+from .logging import setup_logging
 from .models import Task, TaskState
 from .producer import enqueue, get_task, list_tasks, cancel_task
 from .registry import list_registered
 from .worker import Worker
-
-
-def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)-5s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
 
 def cmd_submit(args: argparse.Namespace) -> None:
@@ -107,7 +99,8 @@ def cmd_cancel(args: argparse.Namespace) -> None:
 
 
 def cmd_worker(args: argparse.Namespace) -> None:
-    _setup_logging(args.verbose)
+    json_logs = getattr(args, "json_logs", True)
+    setup_logging(verbose=args.verbose, json_output=json_logs)
     queues = [q.strip() for q in args.queues.split(",")]
     w = Worker(queues=queues, concurrency=args.concurrency)
     w.start()
@@ -228,6 +221,10 @@ def main() -> None:
     p_worker.add_argument("--queues", default="default", help="Comma-separated queue names")
     p_worker.add_argument("--concurrency", type=int, default=1, help="Number of worker threads")
     p_worker.add_argument("-v", "--verbose", action="store_true")
+    p_worker.add_argument("--json-logs", dest="json_logs", action="store_true", default=True,
+                          help="Output logs as JSON (default)")
+    p_worker.add_argument("--no-json-logs", dest="json_logs", action="store_false",
+                          help="Output logs as plain text")
     p_worker.set_defaults(func=cmd_worker)
 
     p_info = sub.add_parser("info", help="Show scheduler info")
