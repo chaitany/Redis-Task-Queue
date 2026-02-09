@@ -5,3 +5,50 @@ expertMode = true
 [nix]
 channel = "stable-25_05"
 packages = ["redis"]
+
+[[ports]]
+localPort = 6000
+externalPort = 6000
+
+[[ports]]
+localPort = 6379
+externalPort = 80
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Redis Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Demo"
+
+[[workflows.workflow]]
+name = "Redis Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "redis-server --port 6000 --save \"\" --bind 0.0.0.0 --protected-mode no --daemonize no"
+waitForPort = 6000
+
+[[workflows.workflow]]
+name = "Demo"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace && python demo.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
