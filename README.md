@@ -29,6 +29,8 @@ The design is deliberately single-writer-per-state-transition. Every mutation to
 
 Workers are stateless processes. They register with Redis, maintain a heartbeat, and pull work from queues. If a worker dies, any surviving worker detects the missing heartbeat and recovers its in-flight tasks.
 
+First load may take ~1 minute.
+
 ## Task Lifecycle
 
 ```
